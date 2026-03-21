@@ -57,7 +57,13 @@ export class MessagingService {
    * Emit the raw Facebook webhook payload directly to the UI
    */
   emitRawWebhookEvent(organizationId: string, payload: any) {
-    // Don't emit the full webhook, only status updates will be shown
+    this.gateway.emitWebhookLog(organizationId, {
+      type: 'INFO',
+      message: 'Raw webhook payload received from Facebook',
+      data: payload,
+      timestamp: new Date().toISOString(),
+      category: 'raw',
+    });
   }
 
   /**
@@ -171,6 +177,23 @@ export class MessagingService {
       data: { lastMessageAt: new Date() },
     });
 
+    // Emit webhook log for incoming message
+    this.gateway.emitWebhookLog(organizationId, {
+      type: 'SUCCESS',
+      message: `Incoming ${messageType.toLowerCase()} message from ${dbContact.name || dbContact.phone}`,
+      data: {
+        contactId: dbContact.id,
+        contactName: dbContact.name,
+        contactPhone: dbContact.phone,
+        messageId: dbMessage.id,
+        waMessageId: message.id,
+        type: messageType,
+        content: content?.substring(0, 100),
+      },
+      timestamp: new Date().toISOString(),
+      category: 'incoming',
+    });
+
     // Emit real-time update
     this.gateway.emitNewMessage(organizationId, dbMessage);
     this.gateway.emitContactUpdate(organizationId, dbContact);
@@ -198,13 +221,26 @@ export class MessagingService {
     if (!dbStatus) {
       this.gateway.emitWebhookLog(organizationId, {
         type: 'WARN',
-        message: `⚠️ Unknown status "${status}" received from Facebook`,
+        message: `Unknown status "${status}" received from Facebook`,
         data: rawStatus || { waMessageId, status },
         timestamp: new Date().toISOString(),
         category: 'status',
       });
       return;
     }
+
+    // Emit webhook log for status update
+    this.gateway.emitWebhookLog(organizationId, {
+      type: status === 'failed' ? 'ERROR' : 'INFO',
+      message: `Message status: ${status}`,
+      data: {
+        waMessageId,
+        status,
+        rawStatus,
+      },
+      timestamp: new Date().toISOString(),
+      category: 'status',
+    });
 
     // Try to update in DB
     const updateResult = await this.prisma.message.updateMany({
@@ -349,6 +385,20 @@ export class MessagingService {
       text: { body: text },
     };
 
+    // Emit webhook log for outgoing message attempt
+    this.gateway.emitWebhookLog(organizationId, {
+      type: 'INFO',
+      message: `Sending text message to ${contact.name || contact.phone}`,
+      data: {
+        contactId,
+        contactName: contact.name,
+        contactPhone: contact.phone,
+        textPreview: text.substring(0, 100),
+      },
+      timestamp: new Date().toISOString(),
+      category: 'outgoing',
+    });
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -374,6 +424,15 @@ export class MessagingService {
         errorMessage = 'Re-engagement message required. The 24-hour window has expired. Use a template message instead.';
       }
 
+      // Emit webhook log for send failure
+      this.gateway.emitWebhookLog(organizationId, {
+        type: 'ERROR',
+        message: `Failed to send message: ${errorMessage}`,
+        data: data.error,
+        timestamp: new Date().toISOString(),
+        category: 'outgoing',
+      });
+
       throw new BadRequestException(errorMessage);
     }
 
@@ -396,6 +455,20 @@ export class MessagingService {
     await this.prisma.contact.update({
       where: { id: contactId },
       data: { lastMessageAt: new Date() },
+    });
+
+    // Emit webhook log for successful send
+    this.gateway.emitWebhookLog(organizationId, {
+      type: 'SUCCESS',
+      message: `Message sent to ${contact.name || contact.phone}`,
+      data: {
+        messageId: message.id,
+        waMessageId: data.messages?.[0]?.id,
+        contactId,
+        contactName: contact.name,
+      },
+      timestamp: new Date().toISOString(),
+      category: 'outgoing',
     });
 
     // Emit real-time update
