@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User & Authentication
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  fullName      String
+  phone         String?
+  avatar        String?
+  role          Role      @default(OWNER)
+  isActive      Boolean   @default(true)
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+  assignedChats  Contact[]     // Chats assigned to this agent
+
+  @@map("users")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// Organization / Business
+model Organization {
+  id                    String    @id @default(cuid())
+  name                  String
+  slug                  String    @unique
+  logo                  String?
+  timezone              String    @default("UTC")
+
+  // WhatsApp Business API
+  whatsappConnected     Boolean   @default(false)
+  facebookAccessToken   String?
+  facebookUserId        String?
+  wabaId                String?   // WhatsApp Business Account ID
+  phoneNumberId         String?   // WhatsApp Phone Number ID
+  phoneNumber           String?   // Actual phone number
+  webhookVerifyToken    String?   // Token for webhook verification
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  users                 User[]
+  contacts              Contact[]
+
+  @@map("organizations")
+}
+
+// WhatsApp Contact (Customer)
+model Contact {
+  id              String      @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // WhatsApp details
+  waId            String      // WhatsApp ID (phone number without +)
+  phone           String      // Display phone number
+  name            String?     // Profile name from WhatsApp
+  profilePicUrl   String?     // Profile picture URL
+
+  // Chat management
+  status          ChatStatus  @default(ACTIVE)
+  assignedToId    String?     // Agent user ID
+  assignedTo      User?       @relation(fields: [assignedToId], references: [id])
+
+  // Metadata
+  tags            String[]    @default([])
+  attributes      Json?       // Custom attributes (email, etc.)
+
+  // Timestamps
+  lastMessageAt   DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  messages        Message[]
+
+  @@unique([organizationId, waId])
+  @@index([organizationId, status])
+  @@index([organizationId, lastMessageAt])
+  @@map("contacts")
+}
+
+// WhatsApp Message
+model Message {
+  id              String          @id @default(cuid())
+  contactId       String
+  contact         Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  // WhatsApp message details
+  waMessageId     String?         @unique // WhatsApp message ID
+  content         String?         // Text content
+  type            MessageType     @default(TEXT)
+  mediaUrl        String?         // URL for media messages
+  mediaCaption    String?         // Caption for media
+
+  // Direction & sender
+  direction       MessageDirection
+  senderType      SenderType      @default(USER)
+  senderId        String?         // User ID if sent by agent
+
+  // Status tracking
+  status          MessageStatus   @default(SENT)
+  statusUpdatedAt DateTime?
+
+  // Timestamps
+  timestamp       DateTime        @default(now())
+
+  @@index([contactId, timestamp])
+  @@map("messages")
+}
+
+enum ChatStatus {
+  ACTIVE      // Bot or new chat
+  REQUESTING  // User requested human
+  INTERVENED  // Agent handling
+  RESOLVED    // Closed/resolved
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  LOCATION
+  CONTACTS
+  TEMPLATE
+  INTERACTIVE
+  REACTION
+}
+
+enum MessageDirection {
+  INBOUND   // From customer
+  OUTBOUND  // To customer
+}
+
+enum SenderType {
+  USER      // Customer
+  AGENT     // Human agent
+  BOT       // Chatbot
+  SYSTEM    // System message
+}
+
+enum MessageStatus {
+  PENDING   // Not sent yet
+  SENT      // Sent to WhatsApp
+  DELIVERED // Delivered to user
+  READ      // Read by user
+  FAILED    // Failed to send
+}
