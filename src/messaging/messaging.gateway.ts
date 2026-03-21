@@ -8,7 +8,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards, UnauthorizedException } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -32,21 +32,41 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   async handleConnection(client: Socket) {
     try {
       const token = client.handshake.auth.token || client.handshake.headers.authorization?.split(' ')[1];
-      
+
       if (!token) {
         this.logger.warn(`Client ${client.id} connected without token`);
+        client.emit('auth_error', { message: 'No token provided' });
         client.disconnect();
         return;
       }
 
-      const payload = await this.jwtService.verifyAsync(token);
+      let payload;
+      try {
+        payload = await this.jwtService.verifyAsync(token);
+      } catch (jwtError) {
+        this.logger.error(`JWT verification failed for client ${client.id}: ${jwtError.message}`);
+        client.emit('auth_error', { message: 'Invalid or expired token' });
+        client.disconnect();
+        return;
+      }
+
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
         select: { id: true, organizationId: true },
       });
 
-      if (!user || !user.organizationId) {
-        throw new UnauthorizedException();
+      if (!user) {
+        this.logger.error(`User not found for client ${client.id}, userId: ${payload.sub}`);
+        client.emit('auth_error', { message: 'User not found' });
+        client.disconnect();
+        return;
+      }
+
+      if (!user.organizationId) {
+        this.logger.error(`User ${user.id} has no organization`);
+        client.emit('auth_error', { message: 'User has no organization' });
+        client.disconnect();
+        return;
       }
 
       // Store user info in client data
@@ -55,10 +75,11 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       // Join organization room
       client.join(`org_${user.organizationId}`);
-      
+
       this.logger.log(`Client ${client.id} (User: ${user.id}) connected to Org: ${user.organizationId}`);
     } catch (error) {
       this.logger.error(`Connection authentication failed for client ${client.id}: ${error.message}`);
+      client.emit('auth_error', { message: error.message });
       client.disconnect();
     }
   }
@@ -79,16 +100,52 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { status: 'ok' };
   }
 
+  // Helper to safely get room client count
+  private getRoomClientCount(room: string): number {
+    try {
+      return this.server?.sockets?.adapter?.rooms?.get(room)?.size || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   // Helper methods to emit events from the service
   emitNewMessage(organizationId: string, message: any) {
-    this.server.to(`org_${organizationId}`).emit('new_message', message);
+    if (!this.server) {
+      this.logger.warn('[EMIT] Server not ready, skipping new_message emit');
+      return;
+    }
+    const room = `org_${organizationId}`;
+    const clientCount = this.getRoomClientCount(room);
+    this.logger.log(`[EMIT] new_message to room ${room} (${clientCount} clients)`);
+    this.server.to(room).emit('new_message', message);
   }
 
   emitStatusUpdate(organizationId: string, data: { waMessageId: string; status: string }) {
-    this.server.to(`org_${organizationId}`).emit('status_update', data);
+    if (!this.server) {
+      this.logger.warn('[EMIT] Server not ready, skipping status_update emit');
+      return;
+    }
+    const room = `org_${organizationId}`;
+    const clientCount = this.getRoomClientCount(room);
+    this.logger.log(`[EMIT] status_update to room ${room} (${clientCount} clients): ${data.status}`);
+    this.server.to(room).emit('status_update', data);
   }
 
   emitContactUpdate(organizationId: string, contact: any) {
-    this.server.to(`org_${organizationId}`).emit('contact_update', contact);
+    if (!this.server) {
+      this.logger.warn('[EMIT] Server not ready, skipping contact_update emit');
+      return;
+    }
+    const room = `org_${organizationId}`;
+    const clientCount = this.getRoomClientCount(room);
+    this.logger.log(`[EMIT] contact_update to room ${room} (${clientCount} clients)`);
+    this.server.to(room).emit('contact_update', contact);
+  }
+
+  emitWebhookLog(organizationId: string, log: { type: string; message: string; data?: any; timestamp: string }) {
+    if (!this.server) return;
+    const room = `org_${organizationId}`;
+    this.server.to(room).emit('webhook_log', log);
   }
 }

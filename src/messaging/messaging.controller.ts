@@ -6,7 +6,11 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
+  Inject,
 } from '@nestjs/common';
+import { CacheInterceptor, CacheTTL, CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { MessagingService } from './messaging.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -92,9 +96,14 @@ export class MessagingController {
     @CurrentUser() user: any,
     @Body() body: { contactId: string; text: string },
   ) {
+    console.log('=== SEND MESSAGE REQUEST ===');
+    console.log('User:', user?.id, 'Org:', user?.organizationId);
+    console.log('Body:', { contactId: body.contactId, text: body.text?.substring(0, 50) });
+
     const organizationId = user.organizationId;
 
     if (!organizationId) {
+      console.log('ERROR: No organization found');
       return { success: false, error: 'No organization found' };
     }
 
@@ -107,9 +116,10 @@ export class MessagingController {
         SenderType.AGENT,
       );
 
+      console.log('SUCCESS: Message sent', message.id);
       return { success: true, message };
     } catch (error: any) {
-      console.error('Send message error:', error);
+      console.error('FAILED: Send message error:', error.message);
       return { success: false, error: error.message || 'Failed to send message' };
     }
   }
@@ -126,6 +136,24 @@ export class MessagingController {
     }
 
     return this.messagingService.getConnectionDebugInfo(organizationId);
+  }
+
+  /**
+   * Debug: Test WhatsApp API connection
+   * Tries to make a real API call to verify token and configuration
+   */
+  @Post('debug/test-send')
+  async testSend(
+    @CurrentUser() user: any,
+    @Body() body: { phone: string },
+  ) {
+    const organizationId = user.organizationId;
+
+    if (!organizationId) {
+      return { success: false, error: 'No organization found' };
+    }
+
+    return this.messagingService.testWhatsAppConnection(organizationId, body.phone);
   }
 
   /**

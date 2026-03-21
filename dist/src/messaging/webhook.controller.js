@@ -40,6 +40,8 @@ let WebhookController = WebhookController_1 = class WebhookController {
         return res.status(403).send('Forbidden');
     }
     async handleWebhook(body, res) {
+        this.logger.log('=== WEBHOOK RECEIVED ===');
+        this.logger.log(`Payload: ${JSON.stringify(body).substring(0, 500)}`);
         res.status(200).send('EVENT_RECEIVED');
         try {
             await this.processWebhookPayload(body);

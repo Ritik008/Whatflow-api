@@ -15,10 +15,17 @@ export declare class MessagingGateway implements OnGatewayConnection, OnGatewayD
     }): {
         status: string;
     };
+    private getRoomClientCount;
     emitNewMessage(organizationId: string, message: any): void;
     emitStatusUpdate(organizationId: string, data: {
         waMessageId: string;
         status: string;
     }): void;
     emitContactUpdate(organizationId: string, contact: any): void;
+    emitWebhookLog(organizationId: string, log: {
+        type: string;
+        message: string;
+        data?: any;
+        timestamp: string;
+    }): void;
 }

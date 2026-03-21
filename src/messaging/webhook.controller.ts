@@ -45,6 +45,9 @@ export class WebhookController {
    */
   @Post()
   async handleWebhook(@Body() body: any, @Res() res: Response) {
+    this.logger.log('=== WEBHOOK RECEIVED ===');
+    this.logger.log(`Payload: ${JSON.stringify(body).substring(0, 500)}`);
+
     // Always respond quickly to Meta
     res.status(200).send('EVENT_RECEIVED');
 

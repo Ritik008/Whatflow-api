@@ -43,16 +43,21 @@ let MessagingController = class MessagingController {
         return { messages, hasMore: messages.length === (limit ? parseInt(limit) : 50) };
     }
     async sendMessage(user, body) {
+        console.log('=== SEND MESSAGE REQUEST ===');
+        console.log('User:', user?.id, 'Org:', user?.organizationId);
+        console.log('Body:', { contactId: body.contactId, text: body.text?.substring(0, 50) });
         const organizationId = user.organizationId;
         if (!organizationId) {
+            console.log('ERROR: No organization found');
             return { success: false, error: 'No organization found' };
         }
         try {
             const message = await this.messagingService.sendTextMessage(organizationId, body.contactId, body.text, user.id, client_1.SenderType.AGENT);
+            console.log('SUCCESS: Message sent', message.id);
             return { success: true, message };
         }
         catch (error) {
-            console.error('Send message error:', error);
+            console.error('FAILED: Send message error:', error.message);
             return { success: false, error: error.message || 'Failed to send message' };
         }
     }
@@ -62,6 +67,13 @@ let MessagingController = class MessagingController {
             return { error: 'No organization found' };
         }
         return this.messagingService.getConnectionDebugInfo(organizationId);
+    }
+    async testSend(user, body) {
+        const organizationId = user.organizationId;
+        if (!organizationId) {
+            return { success: false, error: 'No organization found' };
+        }
+        return this.messagingService.testWhatsAppConnection(organizationId, body.phone);
     }
     async intervene(user, contactId) {
         try {
@@ -170,6 +182,14 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], MessagingController.prototype, "getDebugStatus", null);
+__decorate([
+    (0, common_1.Post)('debug/test-send'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], MessagingController.prototype, "testSend", null);
 __decorate([
     (0, common_1.Post)('contacts/:id/intervene'),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),

@@ -146,6 +146,9 @@ export declare class MessagingController {
     } | {
         error: string;
     }>;
+    testSend(user: any, body: {
+        phone: string;
+    }): Promise<any>;
     intervene(user: any, contactId: string): Promise<{
         success: boolean;
         contact: {

@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { MessagingGateway } from './messaging.gateway';
+import { ConfigService } from '@nestjs/config';
 import { ChatStatus, SenderType } from '@prisma/client';
 interface WhatsAppMessage {
     from: string;
@@ -50,8 +51,10 @@ interface WhatsAppContact {
 export declare class MessagingService {
     private prisma;
     private gateway;
+    private configService;
     private readonly logger;
-    constructor(prisma: PrismaService, gateway: MessagingGateway);
+    private readonly facebookVersion;
+    constructor(prisma: PrismaService, gateway: MessagingGateway, configService: ConfigService);
     processIncomingMessage(organizationId: string, message: WhatsAppMessage, contact: WhatsAppContact): Promise<{
         contact: {
             phone: string;
@@ -330,6 +333,7 @@ export declare class MessagingService {
         tokenPreview: string | null;
         error?: undefined;
     }>;
+    testWhatsAppConnection(organizationId: string, testPhone?: string): Promise<any>;
     sendTemplateMessage(organizationId: string, contactId: string, templateName: string, languageCode: string, components?: any[], senderId?: string): Promise<{
         id: string;
         status: import("@prisma/client").$Enums.MessageStatus;
