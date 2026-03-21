@@ -40,6 +40,42 @@ export class MessagingService {
   }
 
   /**
+   * Emit a webhook event that couldn't be matched to any org (WABA ID mismatch)
+   * Broadcasts to ALL connected clients so it's visible for debugging
+   */
+  emitOrphanWebhookEvent(payload: any, receivedWabaId: string) {
+    this.gateway.emitBroadcast('webhook_log', {
+      type: 'ERROR',
+      message: 'WABA ID mismatch - no organization found',
+      data: { receivedWabaId, payload },
+      timestamp: new Date().toISOString(),
+      category: 'raw',
+    });
+  }
+
+  /**
+   * Emit the raw Facebook webhook payload directly to the UI
+   */
+  emitRawWebhookEvent(organizationId: string, payload: any) {
+    // Don't emit the full webhook, only status updates will be shown
+  }
+
+  /**
+   * Emit a raw status event from Facebook before any DB processing
+   */
+  emitRawStatusEvent(organizationId: string, status: any) {
+    // Show the exact status from Facebook webhook: sent, delivered, read, failed
+    const statusType = status.status;
+    this.gateway.emitWebhookLog(organizationId, {
+      type: statusType === 'failed' ? 'ERROR' : 'INFO',
+      message: statusType,
+      data: status,
+      timestamp: new Date().toISOString(),
+      category: 'status',
+    });
+  }
+
+  /**
    * Process incoming webhook message from WhatsApp
    */
   async processIncomingMessage(
@@ -48,19 +84,6 @@ export class MessagingService {
     contact: WhatsAppContact,
   ) {
     this.logger.log(`Processing message from ${contact.wa_id}: ${message.type}`);
-
-    // Log incoming message event
-    this.gateway.emitWebhookLog(organizationId, {
-      type: 'INFO',
-      message: `📥 Incoming ${message.type} message from ${contact.profile?.name || contact.wa_id}`,
-      data: {
-        from: contact.wa_id,
-        name: contact.profile?.name,
-        type: message.type,
-        waMessageId: message.id,
-      },
-      timestamp: new Date().toISOString(),
-    });
 
     // Find or create contact
     const dbContact = await this.findOrCreateContact(
@@ -152,18 +175,6 @@ export class MessagingService {
     this.gateway.emitNewMessage(organizationId, dbMessage);
     this.gateway.emitContactUpdate(organizationId, dbContact);
 
-    // Log success
-    this.gateway.emitWebhookLog(organizationId, {
-      type: 'SUCCESS',
-      message: `📥 Message received and saved`,
-      data: {
-        messageId: dbMessage.id,
-        content: content?.substring(0, 50) + (content && content.length > 50 ? '...' : ''),
-        from: contact.wa_id,
-      },
-      timestamp: new Date().toISOString(),
-    });
-
     return { contact: dbContact, message: dbMessage };
   }
 
@@ -171,8 +182,10 @@ export class MessagingService {
    * Process message status update from WhatsApp
    */
   async processStatusUpdate(
+    organizationId: string,
     waMessageId: string,
     status: 'sent' | 'delivered' | 'read' | 'failed',
+    rawStatus?: any,
   ) {
     const statusMap: Record<string, MessageStatus> = {
       sent: MessageStatus.SENT,
@@ -181,51 +194,49 @@ export class MessagingService {
       failed: MessageStatus.FAILED,
     };
 
-    const statusEmojis: Record<string, string> = {
-      sent: '✓',
-      delivered: '✓✓',
-      read: '👁️',
-      failed: '❌',
-    };
-
     const dbStatus = statusMap[status];
-    if (!dbStatus) return;
+    if (!dbStatus) {
+      this.gateway.emitWebhookLog(organizationId, {
+        type: 'WARN',
+        message: `⚠️ Unknown status "${status}" received from Facebook`,
+        data: rawStatus || { waMessageId, status },
+        timestamp: new Date().toISOString(),
+        category: 'status',
+      });
+      return;
+    }
 
-    await this.prisma.message.updateMany({
+    // Try to update in DB
+    const updateResult = await this.prisma.message.updateMany({
       where: { waMessageId },
-      data: {
-        status: dbStatus,
-        statusUpdatedAt: new Date(),
-      },
+      data: { status: dbStatus, statusUpdatedAt: new Date() },
     });
 
-    // Get organizationId for the message to emit status update
-    const message = await this.prisma.message.findUnique({
+    // Find the message to get contact info for real-time emit
+    const message = await this.prisma.message.findFirst({
       where: { waMessageId },
       include: { contact: { select: { organizationId: true, name: true, phone: true } } },
     });
 
-    if (message) {
-      this.gateway.emitStatusUpdate(message.contact.organizationId, {
+    if (!message) {
+      // Message not in DB yet — this is common if status arrives before our DB write
+      // Still emit to UI in case the message is already there from the API response
+      this.gateway.emitStatusUpdate(organizationId, {
         waMessageId,
         status: dbStatus,
       });
-
-      // Emit webhook log for status update
-      const logType = status === 'failed' ? 'ERROR' : 'INFO';
-      this.gateway.emitWebhookLog(message.contact.organizationId, {
-        type: logType,
-        message: `${statusEmojis[status]} Message ${status.toUpperCase()}${message.contact.name ? ` - ${message.contact.name}` : ''}`,
-        data: {
-          waMessageId,
-          status: dbStatus,
-          recipient: message.contact.phone,
-        },
-        timestamp: new Date().toISOString(),
-      });
+      
+      this.logger.warn(`Status update for unknown message: ${waMessageId}`);
+      return;
     }
 
-    this.logger.log(`Updated status for ${waMessageId}: ${status}`);
+    // Emit real-time status update to UI
+    this.gateway.emitStatusUpdate(message.contact.organizationId, {
+      waMessageId,
+      status: dbStatus,
+    });
+
+    this.logger.log(`Status updated: ${waMessageId} → ${status}`);
   }
 
   /**
@@ -338,8 +349,6 @@ export class MessagingService {
       text: { body: text },
     };
 
-    this.logger.log(`Request Payload: ${JSON.stringify(requestBody)}`);
-
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -365,12 +374,6 @@ export class MessagingService {
         errorMessage = 'Re-engagement message required. The 24-hour window has expired. Use a template message instead.';
       }
 
-      this.gateway.emitWebhookLog(org.id, {
-        type: 'ERROR',
-        message: `❌ Send failed: ${errorMessage}`,
-        data: { to: contact.phone, error: data.error },
-        timestamp: new Date().toISOString(),
-      });
       throw new BadRequestException(errorMessage);
     }
 
@@ -393,18 +396,6 @@ export class MessagingService {
     await this.prisma.contact.update({
       where: { id: contactId },
       data: { lastMessageAt: new Date() },
-    });
-
-    this.logger.log(`Message sent: ${message.id}`);
-    this.gateway.emitWebhookLog(org.id, {
-      type: 'SUCCESS',
-      message: `📤 Message sent to ${contact.name || contact.phone}`,
-      data: {
-        to: contact.phone,
-        content: text.substring(0, 50) + (text.length > 50 ? '...' : ''),
-        waMessageId: data.messages?.[0]?.id,
-      },
-      timestamp: new Date().toISOString(),
     });
 
     // Emit real-time update

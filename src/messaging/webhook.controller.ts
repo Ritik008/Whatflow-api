@@ -52,7 +52,6 @@ export class WebhookController {
     res.status(200).send('EVENT_RECEIVED');
 
     try {
-      // Process the webhook payload
       await this.processWebhookPayload(body);
     } catch (error) {
       this.logger.error(`Error processing webhook: ${error.message}`, error.stack);
@@ -66,18 +65,15 @@ export class WebhookController {
       return;
     }
 
-    // Process each entry
     for (const entry of payload.entry || []) {
-      const wabaId = entry.id; // WhatsApp Business Account ID
+      const wabaId = entry.id;
 
       if (!wabaId) {
         this.logger.warn('No WABA ID in webhook entry');
         continue;
       }
 
-      this.logger.log(`Looking up organization for WABA ID: ${wabaId}`);
-
-      // Find organization by WABA ID with error handling
+      // Find organization by WABA ID
       let org: { id: string; name: string } | null = null;
       try {
         org = await this.prisma.organization.findFirst({
@@ -90,10 +86,13 @@ export class WebhookController {
 
       if (!org) {
         this.logger.warn(`No organization found for WABA ID: ${wabaId}`);
+        // Broadcast to all connected clients so the issue is visible in the monitor
+        this.messagingService.emitOrphanWebhookEvent(payload, String(wabaId));
         continue;
       }
 
-      this.logger.log(`Found organization: ${org.id} (${org.name})`);
+      // Emit the raw Facebook payload so the UI can see exactly what arrived
+      this.messagingService.emitRawWebhookEvent(org.id, payload);
 
       // Process changes
       for (const change of entry.changes || []) {
@@ -105,7 +104,6 @@ export class WebhookController {
         if (value.messages) {
           for (const message of value.messages) {
             const contact = value.contacts?.find((c: any) => c.wa_id === message.from);
-
             await this.messagingService.processIncomingMessage(
               org.id,
               message,
@@ -114,13 +112,12 @@ export class WebhookController {
           }
         }
 
-        // Process status updates
+        // Process status updates — emit each one individually with full detail
         if (value.statuses) {
           for (const status of value.statuses) {
-            await this.messagingService.processStatusUpdate(
-              status.id,
-              status.status,
-            );
+            // Emit raw status FIRST before any DB lookup can fail
+            this.messagingService.emitRawStatusEvent(org.id, status);
+            await this.messagingService.processStatusUpdate(org.id, status.id, status.status, status);
           }
         }
       }

@@ -14,7 +14,12 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @WebSocketGateway({
   cors: {
-    origin: '*', // In production, replace with your frontend URL
+    origin: [
+      process.env.FRONTEND_URL || 'http://localhost:5173',
+      'http://localhost:5173',
+      'http://localhost:3000',
+    ],
+    credentials: true,
   },
   namespace: 'messaging',
 })
@@ -143,9 +148,15 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.server.to(room).emit('contact_update', contact);
   }
 
-  emitWebhookLog(organizationId: string, log: { type: string; message: string; data?: any; timestamp: string }) {
+  emitWebhookLog(organizationId: string, log: { type: string; message: string; data?: any; timestamp: string; category?: string }) {
     if (!this.server) return;
     const room = `org_${organizationId}`;
     this.server.to(room).emit('webhook_log', log);
+  }
+
+  // Broadcast to ALL connected clients (used when org can't be identified)
+  emitBroadcast(event: string, data: any) {
+    if (!this.server) return;
+    this.server.emit(event, data);
   }
 }
