@@ -70,15 +70,30 @@ export class WebhookController {
     for (const entry of payload.entry || []) {
       const wabaId = entry.id; // WhatsApp Business Account ID
 
-      // Find organization by WABA ID
-      const org = await this.prisma.organization.findFirst({
-        where: { wabaId },
-      });
+      if (!wabaId) {
+        this.logger.warn('No WABA ID in webhook entry');
+        continue;
+      }
+
+      this.logger.log(`Looking up organization for WABA ID: ${wabaId}`);
+
+      // Find organization by WABA ID with error handling
+      let org: { id: string; name: string } | null = null;
+      try {
+        org = await this.prisma.organization.findFirst({
+          where: { wabaId: String(wabaId) },
+        });
+      } catch (dbError) {
+        this.logger.error(`Database error looking up org: ${dbError.message}`);
+        continue;
+      }
 
       if (!org) {
         this.logger.warn(`No organization found for WABA ID: ${wabaId}`);
         continue;
       }
+
+      this.logger.log(`Found organization: ${org.id} (${org.name})`);
 
       // Process changes
       for (const change of entry.changes || []) {
