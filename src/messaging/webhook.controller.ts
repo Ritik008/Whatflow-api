@@ -115,8 +115,6 @@ export class WebhookController {
         // Process status updates — emit each one individually with full detail
         if (value.statuses) {
           for (const status of value.statuses) {
-            // Emit raw status FIRST before any DB lookup can fail
-            this.messagingService.emitRawStatusEvent(org.id, status);
             await this.messagingService.processStatusUpdate(org.id, status.id, status.status, status);
           }
         }
